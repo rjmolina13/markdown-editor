@@ -333,19 +333,83 @@ if (urlParams.has("fs") || hashParams.has("fs")) {
   }
 }
 
-function decodeContent(encoded) {
+function encodeBytesToBase64Url(bytes) {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function decodeBase64UrlToBytes(base64Url) {
+  const normalizedBase64 = `${base64Url.replace(/-/g, "+").replace(/_/g, "/")}${"===".slice((base64Url.length + 3) % 4)}`;
+  const binary = atob(normalizedBase64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+async function compressWithStream(content, formats) {
+  if (typeof CompressionStream === "undefined") {
+    return null;
+  }
+  const input = new TextEncoder().encode(content);
+  for (const format of formats) {
+    try {
+      const stream = new CompressionStream(format);
+      const writer = stream.writable.getWriter();
+      await writer.write(input);
+      await writer.close();
+      const compressed = new Uint8Array(await new Response(stream.readable).arrayBuffer());
+      if (compressed.length) {
+        return { format, compressed };
+      }
+    } catch {}
+  }
+  return null;
+}
+
+async function decompressWithStream(bytes, formats) {
+  if (typeof DecompressionStream === "undefined") {
+    return "";
+  }
+  for (const format of formats) {
+    try {
+      const stream = new DecompressionStream(format);
+      const writer = stream.writable.getWriter();
+      await writer.write(bytes);
+      await writer.close();
+      const outputBytes = new Uint8Array(await new Response(stream.readable).arrayBuffer());
+      const output = new TextDecoder().decode(outputBytes);
+      if (output) {
+        return output;
+      }
+    } catch {}
+  }
+  return "";
+}
+
+async function decodeContent(encoded) {
   if (!encoded) {
     return "";
   }
   try {
+    if (encoded.startsWith("b:")) {
+      const bytes = decodeBase64UrlToBytes(encoded.slice(2));
+      const decompressedBrotli = await decompressWithStream(bytes, ["br", "brotli"]);
+      if (decompressedBrotli) return decompressedBrotli;
+    }
+    if (encoded.startsWith("g:")) {
+      const bytes = decodeBase64UrlToBytes(encoded.slice(2));
+      const decompressedGzip = await decompressWithStream(bytes, ["gzip"]);
+      if (decompressedGzip) return decompressedGzip;
+    }
     if (encoded.startsWith("u:")) {
-      const base64Url = encoded.slice(2);
-      const normalizedBase64 = `${base64Url.replace(/-/g, "+").replace(/_/g, "/")}${"===".slice((base64Url.length + 3) % 4)}`;
-      const binary = atob(normalizedBase64);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i += 1) {
-        bytes[i] = binary.charCodeAt(i);
-      }
+      const bytes = decodeBase64UrlToBytes(encoded.slice(2));
       const decompressedBytes = LZString.decompressFromUint8Array(bytes);
       if (decompressedBytes) return decompressedBytes;
     }
@@ -357,17 +421,18 @@ function decodeContent(encoded) {
   }
 }
 
-function encodeContent(content) {
+async function encodeContent(content) {
+  const brotliCompressed = await compressWithStream(content, ["br", "brotli"]);
+  if (brotliCompressed) {
+    return `b:${encodeBytesToBase64Url(brotliCompressed.compressed)}`;
+  }
+  const gzipCompressed = await compressWithStream(content, ["gzip"]);
+  if (gzipCompressed) {
+    return `g:${encodeBytesToBase64Url(gzipCompressed.compressed)}`;
+  }
   try {
     const compressedBytes = LZString.compressToUint8Array(content);
-    let binary = "";
-    const chunkSize = 0x8000;
-    for (let i = 0; i < compressedBytes.length; i += chunkSize) {
-      const chunk = compressedBytes.subarray(i, i + chunkSize);
-      binary += String.fromCharCode(...chunk);
-    }
-    const base64Url = btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
-    return `u:${base64Url}`;
+    return `u:${encodeBytesToBase64Url(compressedBytes)}`;
   } catch {
     return encodeURIComponent(LZString.compressToBase64(content));
   }
@@ -459,15 +524,16 @@ function saveLocal(text) {
   setStoredValue(STORAGE_KEY, text);
 }
 
-function getInitialContent() {
+async function applyInitialContentFromUrl() {
   const queryEncoded = parseEncodedFromQuery();
-  const decoded = decodeContent(queryEncoded);
+  const decoded = await decodeContent(queryEncoded);
   if (decoded) {
     saveLocal(decoded);
-    normalizeContentUrl(encodeContent(decoded));
-    return decoded;
+    const normalizedEncoded = await encodeContent(decoded);
+    normalizeContentUrl(normalizedEncoded);
+    editor.value(decoded);
+    renderMarkdown(decoded);
   }
-  return getStoredValue(STORAGE_KEY) || FALLBACK_TEXT;
 }
 
 const editor = new EasyMDE({
@@ -557,8 +623,9 @@ editor.codemirror.on("refresh", () => {
   }
 });
 
-editor.value(getInitialContent());
-renderMarkdown(editor.value());
+const initialContent = getStoredValue(STORAGE_KEY) || FALLBACK_TEXT;
+editor.value(initialContent);
+renderMarkdown(initialContent);
 
 let renderTimer = null;
 editor.codemirror.on("change", () => {
@@ -591,7 +658,7 @@ function setButtonLabel(button, label) {
 }
 
 copyEncodedBtn?.addEventListener("click", async () => {
-  const encoded = encodeContent(editor.value());
+  const encoded = await encodeContent(editor.value());
   const origin = window.location.origin;
   const isFs = document.body.classList.contains("editor-is-fullscreen") || document.body.classList.contains("preview-is-fullscreen");
   
@@ -604,6 +671,8 @@ copyEncodedBtn?.addEventListener("click", async () => {
     setButtonLabel(copyEncodedBtn, "Copy Link");
   }, 2000);
 });
+
+applyInitialContentFromUrl();
 
 openPreviewBtn?.addEventListener("click", () => {
   updateActiveTab("preview");
