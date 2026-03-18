@@ -1,5 +1,5 @@
 const APP_SHORTNAME = "rme";
-const APP_VERSION = "2.3";
+const APP_VERSION = "2.5";
 const WORKER_URL = "https://md-api.rubyj.workers.dev";
 const STORAGE_KEY = `${APP_SHORTNAME}_markdown_content_v1`;
 const THEME_KEY = "theme"; 
@@ -692,7 +692,17 @@ copyEncodedBtn?.addEventListener("click", async () => {
     if (!response.ok) throw new Error("Failed to save");
 
     const data = await response.json();
-    const shareUrl = `${window.location.origin}${window.location.pathname}?id=${data.id}`;
+    
+    const isFs = document.body.classList.contains("editor-is-fullscreen") || document.body.classList.contains("preview-is-fullscreen");
+    const url = new URL(window.location.href);
+    url.search = "";
+    url.hash = "";
+    url.searchParams.set("page", mode);
+    if (isFs) {
+      url.searchParams.set("fs", "1");
+    }
+    url.searchParams.set("id", data.id);
+    const shareUrl = url.toString();
     
     const copied = await copyTextToClipboard(shareUrl);
     setButtonLabel(copyEncodedBtn, copied ? "Copied URL!" : "Copy this URL");
