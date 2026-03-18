@@ -23,7 +23,10 @@
     <script>
       tailwind.config = { darkMode: 'class' };
       const prefersDark = window.matchMedia('(prefers-color-scheme: dark)');
-      const storedTheme = localStorage.getItem('theme');
+      let storedTheme = null;
+      try {
+        storedTheme = window.localStorage.getItem('theme');
+      } catch {}
       if (storedTheme === 'dark' || (!storedTheme && prefersDark.matches)) {
         document.documentElement.classList.add('dark');
       } else {

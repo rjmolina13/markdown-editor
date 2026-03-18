@@ -2,6 +2,64 @@ const APP_SHORTNAME = "rme";
 const APP_VERSION = "2.3";
 const STORAGE_KEY = `${APP_SHORTNAME}_markdown_content_v1`;
 const THEME_KEY = "theme"; 
+const storage = (() => {
+  try {
+    const key = "__storage_test__";
+    window.localStorage.setItem(key, "1");
+    window.localStorage.removeItem(key);
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+})();
+
+function getStoredValue(key) {
+  if (!storage) return null;
+  try {
+    return storage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function setStoredValue(key, value) {
+  if (!storage) return false;
+  try {
+    storage.setItem(key, value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function copyTextToClipboard(text) {
+  try {
+    if (navigator.clipboard?.writeText && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {}
+
+  try {
+    const textArea = document.createElement("textarea");
+    textArea.value = text;
+    textArea.setAttribute("readonly", "");
+    textArea.style.position = "fixed";
+    textArea.style.top = "-9999px";
+    textArea.style.opacity = "0";
+    document.body.appendChild(textArea);
+    textArea.select();
+    textArea.setSelectionRange(0, textArea.value.length);
+    const copied = document.execCommand("copy");
+    document.body.removeChild(textArea);
+    if (copied) return true;
+  } catch {}
+
+  if (typeof window.prompt === "function") {
+    window.prompt("Copy this link:", text);
+  }
+  return false;
+}
 
 const ICON_PATHS = {
   sun: '<circle cx="12" cy="12" r="4"></circle><path d="M12 2v2"></path><path d="M12 20v2"></path><path d="m4.93 4.93 1.41 1.41"></path><path d="m17.66 17.66 1.41 1.41"></path><path d="M2 12h2"></path><path d="M20 12h2"></path><path d="m6.34 17.66-1.41 1.41"></path><path d="m19.07 4.93-1.41 1.41"></path>',
@@ -40,13 +98,13 @@ updateThemeUI();
 
 themeToggleBtn?.addEventListener("click", () => {
   const isDark = document.documentElement.classList.toggle("dark");
-  localStorage.setItem(THEME_KEY, isDark ? "dark" : "light");
+  setStoredValue(THEME_KEY, isDark ? "dark" : "light");
   updateThemeUI();
 });
 
 // Listen for system theme changes if no explicit preference is set
 window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", (e) => {
-  if (!localStorage.getItem(THEME_KEY)) {
+  if (!getStoredValue(THEME_KEY)) {
     document.documentElement.classList.toggle("dark", e.matches);
     updateThemeUI();
   }
@@ -102,7 +160,7 @@ const MICA_KEY = "editor_mica";
 let editorBgToolbarButton = null;
 
 // Mica Toggle Logic
-const storedMica = localStorage.getItem(MICA_KEY);
+const storedMica = getStoredValue(MICA_KEY);
 let isMica = storedMica ? storedMica !== "false" && storedMica !== "flat" : true;
 
 function updateMicaUI() {
@@ -129,7 +187,7 @@ function updateMicaUI() {
 
 function toggleEditorBackground() {
   isMica = !isMica;
-  localStorage.setItem(MICA_KEY, isMica ? "mica" : "flat");
+  setStoredValue(MICA_KEY, isMica ? "mica" : "flat");
   updateMicaUI();
 }
 
@@ -343,7 +401,7 @@ function renderMarkdown(text) {
 }
 
 function saveLocal(text) {
-  localStorage.setItem(STORAGE_KEY, text);
+  setStoredValue(STORAGE_KEY, text);
 }
 
 function getInitialContent() {
@@ -353,7 +411,7 @@ function getInitialContent() {
     saveLocal(decoded);
     return decoded;
   }
-  return localStorage.getItem(STORAGE_KEY) || FALLBACK_TEXT;
+  return getStoredValue(STORAGE_KEY) || FALLBACK_TEXT;
 }
 
 const editor = new EasyMDE({
@@ -484,8 +542,8 @@ copyEncodedBtn?.addEventListener("click", async () => {
   // New URL format: /?page={mode}&content={encoded}
   const shareUrl = `${origin}/?page=${mode}&content=${encoded}${isFs ? "&fs=1" : ""}`;
   
-  await navigator.clipboard.writeText(shareUrl);
-  setButtonLabel(copyEncodedBtn, "Copied URL!");
+  const copied = await copyTextToClipboard(shareUrl);
+  setButtonLabel(copyEncodedBtn, copied ? "Copied URL!" : "Copy this URL");
   window.setTimeout(() => {
     setButtonLabel(copyEncodedBtn, "Copy Link");
   }, 2000);
