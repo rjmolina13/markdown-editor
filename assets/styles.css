@@ -319,6 +319,10 @@ body.editor-is-fullscreen #previewPanel {
   /* Removed opacity transition for simpler visibility control */
 }
 
+.preview-toolbar.hidden {
+  display: none !important;
+}
+
 .preview-controls-row {
   display: flex;
   align-items: center;
