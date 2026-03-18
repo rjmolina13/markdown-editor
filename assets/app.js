@@ -88,8 +88,8 @@ function updateThemeUI() {
   
   if (hljsTheme) {
     hljsTheme.href = isDark 
-      ? "https://cdn.jsdelivr.net/npm/highlight.js@11.11.1/styles/github-dark.min.css"
-      : "https://cdn.jsdelivr.net/npm/highlight.js@11.11.1/styles/github.min.css";
+      ? "/assets/vendor/highlight-github-dark.min.css"
+      : "/assets/vendor/highlight-github.min.css";
   }
 }
 
