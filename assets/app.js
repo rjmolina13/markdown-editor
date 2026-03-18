@@ -121,9 +121,10 @@ Start writing on the **Editor** tab, switch to **Preview**, then share with comp
 - Auto-save in localStorage
 - Fast preview rendering with syntax highlighting`;
 
-// Determine mode from URL query parameters
+// Determine mode from URL parameters
 const urlParams = new URLSearchParams(window.location.search);
-let mode = urlParams.get("page") || urlParams.get("mode") || "editor";
+const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+let mode = hashParams.get("page") || hashParams.get("mode") || urlParams.get("page") || urlParams.get("mode") || "editor";
 
 // If page/mode is not explicitly editor or preview, default to editor
 if (mode !== "editor" && mode !== "preview") {
@@ -265,6 +266,15 @@ marked.setOptions({
 });
 
 function parseEncodedFromQuery() {
+  const hashRaw = window.location.hash.replace(/^#/, "");
+  const hash = new URLSearchParams(hashRaw);
+  if (hash.has("content")) {
+    return hash.get("content");
+  }
+  if (hashRaw.startsWith("=")) {
+    return hashRaw.slice(1);
+  }
+
   const params = new URLSearchParams(window.location.search);
   
   // Prefer explicit content parameter
@@ -311,7 +321,7 @@ function parseEncodedFromQuery() {
 }
 
 // Fullscreen URL param check
-if (urlParams.has("fs")) {
+if (urlParams.has("fs") || hashParams.has("fs")) {
   if (mode === "editor") {
     // Editor fullscreen handled by EasyMDE logic later
     window.addEventListener("load", () => {
@@ -328,11 +338,19 @@ function decodeContent(encoded) {
     return "";
   }
   try {
-    // Try to decode with base64 compression first (new format)
+    if (encoded.startsWith("u:")) {
+      const base64Url = encoded.slice(2);
+      const normalizedBase64 = `${base64Url.replace(/-/g, "+").replace(/_/g, "/")}${"===".slice((base64Url.length + 3) % 4)}`;
+      const binary = atob(normalizedBase64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i += 1) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      const decompressedBytes = LZString.decompressFromUint8Array(bytes);
+      if (decompressedBytes) return decompressedBytes;
+    }
     const decompressedBase64 = LZString.decompressFromBase64(decodeURIComponent(encoded));
     if (decompressedBase64) return decompressedBase64;
-    
-    // Fallback to URI component decoding (legacy format)
     return LZString.decompressFromEncodedURIComponent(encoded) || "";
   } catch {
     return "";
@@ -340,8 +358,38 @@ function decodeContent(encoded) {
 }
 
 function encodeContent(content) {
-  // Use Base64 compression to significantly decrease character count compared to URI component
-  return encodeURIComponent(LZString.compressToBase64(content));
+  try {
+    const compressedBytes = LZString.compressToUint8Array(content);
+    let binary = "";
+    const chunkSize = 0x8000;
+    for (let i = 0; i < compressedBytes.length; i += chunkSize) {
+      const chunk = compressedBytes.subarray(i, i + chunkSize);
+      binary += String.fromCharCode(...chunk);
+    }
+    const base64Url = btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+    return `u:${base64Url}`;
+  } catch {
+    return encodeURIComponent(LZString.compressToBase64(content));
+  }
+}
+
+function normalizeContentUrl(encoded) {
+  if (!encoded) {
+    return;
+  }
+  const url = new URL(window.location);
+  if (!url.searchParams.has("content")) {
+    return;
+  }
+  const nextHashParams = new URLSearchParams(url.hash.replace(/^#/, ""));
+  nextHashParams.set("page", mode);
+  nextHashParams.set("content", encoded);
+  if (url.searchParams.has("fs")) {
+    nextHashParams.set("fs", "1");
+  }
+  url.hash = nextHashParams.toString();
+  url.search = "";
+  window.history.replaceState({}, "", url);
 }
 
 const previewToolbar = document.getElementById("previewToolbar");
@@ -351,7 +399,14 @@ function updateActiveTab(nextTab) {
   
   // Update URL state without reloading
   const url = new URL(window.location);
-  url.searchParams.set("page", nextTab);
+  const currentHash = url.hash.replace(/^#/, "");
+  const nextHashParams = new URLSearchParams(currentHash);
+  if (nextHashParams.has("content")) {
+    nextHashParams.set("page", nextTab);
+    url.hash = nextHashParams.toString();
+  } else {
+    url.searchParams.set("page", nextTab);
+  }
   window.history.replaceState({}, "", url);
 
   tabButtons.forEach((button) => {
@@ -409,6 +464,7 @@ function getInitialContent() {
   const decoded = decodeContent(queryEncoded);
   if (decoded) {
     saveLocal(decoded);
+    normalizeContentUrl(encodeContent(decoded));
     return decoded;
   }
   return getStoredValue(STORAGE_KEY) || FALLBACK_TEXT;
@@ -539,8 +595,8 @@ copyEncodedBtn?.addEventListener("click", async () => {
   const origin = window.location.origin;
   const isFs = document.body.classList.contains("editor-is-fullscreen") || document.body.classList.contains("preview-is-fullscreen");
   
-  // New URL format: /?page={mode}&content={encoded}
-  const shareUrl = `${origin}/?page=${mode}&content=${encoded}${isFs ? "&fs=1" : ""}`;
+  // Hash-based URL avoids server URI length limits for long encoded content
+  const shareUrl = `${origin}/#page=${mode}&content=${encoded}${isFs ? "&fs=1" : ""}`;
   
   const copied = await copyTextToClipboard(shareUrl);
   setButtonLabel(copyEncodedBtn, copied ? "Copied URL!" : "Copy this URL");
