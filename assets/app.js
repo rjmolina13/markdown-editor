@@ -1,5 +1,6 @@
 const APP_SHORTNAME = "rme";
 const APP_VERSION = "2.3";
+const WORKER_URL = "https://md-api.rubyj.workers.dev";
 const STORAGE_KEY = `${APP_SHORTNAME}_markdown_content_v1`;
 const THEME_KEY = "theme"; 
 const storage = (() => {
@@ -525,6 +526,26 @@ function saveLocal(text) {
 }
 
 async function applyInitialContentFromUrl() {
+  const urlParams = new URLSearchParams(window.location.search);
+  const pasteId = urlParams.get("id");
+
+  if (pasteId) {
+    try {
+      const response = await fetch(`${WORKER_URL}/${pasteId}`);
+      if (response.ok) {
+        const text = await response.text();
+        saveLocal(text);
+        editor.value(text);
+        renderMarkdown(text);
+        return;
+      } else {
+        alert("Document not found or has expired.");
+      }
+    } catch (error) {
+      console.error("Error loading document:", error);
+    }
+  }
+
   const queryEncoded = parseEncodedFromQuery();
   const decoded = await decodeContent(queryEncoded);
   if (decoded) {
@@ -658,15 +679,33 @@ function setButtonLabel(button, label) {
 }
 
 copyEncodedBtn?.addEventListener("click", async () => {
-  const encoded = await encodeContent(editor.value());
-  const origin = window.location.origin;
-  const isFs = document.body.classList.contains("editor-is-fullscreen") || document.body.classList.contains("preview-is-fullscreen");
-  
-  // Hash-based URL avoids server URI length limits for long encoded content
-  const shareUrl = `${origin}/#page=${mode}&content=${encoded}${isFs ? "&fs=1" : ""}`;
-  
-  const copied = await copyTextToClipboard(shareUrl);
-  setButtonLabel(copyEncodedBtn, copied ? "Copied URL!" : "Copy this URL");
+  const rawContent = editor.value();
+  setButtonLabel(copyEncodedBtn, "Generating...");
+
+  try {
+    const response = await fetch(WORKER_URL, {
+      method: "POST",
+      body: rawContent,
+      headers: { "Content-Type": "text/plain" }
+    });
+
+    if (!response.ok) throw new Error("Failed to save");
+
+    const data = await response.json();
+    const shareUrl = `${window.location.origin}${window.location.pathname}?id=${data.id}`;
+    
+    const copied = await copyTextToClipboard(shareUrl);
+    setButtonLabel(copyEncodedBtn, copied ? "Copied URL!" : "Copy this URL");
+    
+    if (!copied) {
+      window.prompt("Copy this link:", shareUrl);
+    }
+  } catch (error) {
+    console.error("Failed to generate link:", error);
+    setButtonLabel(copyEncodedBtn, "Error!");
+    alert("Failed to connect to the database.");
+  }
+
   window.setTimeout(() => {
     setButtonLabel(copyEncodedBtn, "Copy Link");
   }, 2000);
